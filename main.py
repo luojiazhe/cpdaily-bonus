@@ -1,5 +1,6 @@
-#coding=utf-8
+# coding=utf-8
 
+import sys
 import requests
 import json
 import hashlib
@@ -8,10 +9,13 @@ import pyaes
 import time
 from pyDes import des, CBC, PAD_PKCS5
 
-LOGINAPI = 'http://localhost:port/login-api/api/login?login_url=https%3A%2F%2Fneau.campusphere.net%2Fiap%2Flogin%3Fservice%3Dhttps%3A%2F%2Fneau.campusphere.net%2Fportal%2Flogin'
-LOGINURL = 'https://neau.campusphere.net/wec-counselor-sign-apps/stu/sign/submitSign'
-TASKURL = 'https://neau.campusphere.net/wec-counselor-sign-apps/stu/sign/getStuSignInfosInOneDay'
-DETAILTASKURL = 'https://neau.campusphere.net/wec-counselor-sign-apps/stu/sign/detailSignInstance'
+LOGIN_API = 'http://localhost:port/login-api/api/login?login_url=https%3A%2F%2Fneau.campusphere.net%2Fiap%2Flogin%3Fservice%3Dhttps%3A%2F%2Fneau.campusphere.net%2Fportal%2Flogin'
+SUBMIT_SIGN_URL = 'https://neau.campusphere.net/wec-counselor-sign-apps/stu/sign/submitSign'
+SUBMIT_ATTENDANCE_URL = 'https://neau.campusphere.net/wec-counselor-attendance-apps/student/attendance/submitSign'
+SIGN_TASK_URL = 'https://neau.campusphere.net/wec-counselor-sign-apps/stu/sign/getStuSignInfosInOneDay'
+DETAIL_SIGN_TASK_URL = 'https://neau.campusphere.net/wec-counselor-sign-apps/stu/sign/detailSignInstance'
+ATTENDANCE_TASK_URL = 'https://neau.campusphere.net/wec-counselor-attendance-apps/student/attendance/getStuAttendacesInOneDay'
+DETAIL_ATTENDANCE_TASK_URL = 'https://neau.campusphere.net/wec-counselor-attendance-apps/student/attendance/detailSignInstance'
 DESKEY = 'b3L26XNL'
 AESKEY = 'ytUQ7l2ZZu8mLvJZ'
 
@@ -53,7 +57,7 @@ class Utils:
 
     @staticmethod
     def getCookie(user):
-        postUrl = LOGINAPI + '&username=' + \
+        postUrl = LOGIN_API + '&username=' + \
             user['username'] + '&password=' + user['password']
         resBody = json.loads(requests.post(url=postUrl).text)
         if resBody['msg'] == 'login success!':
@@ -89,6 +93,48 @@ class Utils:
         return Utils.desEncrypt(json.dumps(info), DESKEY)
 
     @staticmethod
+    def getBodyString(form):
+        return Utils.aesEncrypt(json.dumps(form), AESKEY)
+
+    @staticmethod
+    def getSign(reqForm):
+        form = {
+            "appVersion": '9.0.12',
+            "bodyString": reqForm['bodyString'],
+            "deviceId": reqForm["deviceId"],
+            "lat": reqForm["lat"],
+            "lon": reqForm["lon"],
+            "model": reqForm["model"],
+            "systemName": reqForm["systemName"],
+            "systemVersion": reqForm["systemVersion"],
+            "userId": reqForm["userId"],
+        }
+        signStr = ''
+        for info in form:
+            if signStr:
+                signStr += '&'
+            signStr += "{}={}".format(info, form[info])
+        signStr += "&{}".format(AESKEY)
+        return hashlib.md5(signStr.encode()).hexdigest()
+
+    @staticmethod
+    def getReqForm(user, form):
+        reqForm = {}
+        reqForm['appVersion'] = '9.0.12'
+        reqForm['systemName'] = "iOS"
+        reqForm['bodyString'] = Utils.getBodyString(form)
+        reqForm['lon'] = form['longitude']
+        reqForm['calVersion'] = 'firstv'
+        reqForm['model'] = 'iPhone11,2'
+        reqForm['systemVersion'] = '15.0'
+        reqForm['deviceId'] = user['deviceId']
+        reqForm['userId'] = user['username']
+        reqForm['version'] = "first_v2"
+        reqForm['lat'] = form['latitude']
+        reqForm['sign'] = Utils.getSign(reqForm)
+        return reqForm
+
+    @staticmethod
     def desEncrypt(s, key):
         iv = b"\x01\x02\x03\x04\x05\x06\x07\x08"
         k = des(key, CBC, iv, pad=None, padmode=PAD_PKCS5)
@@ -109,7 +155,7 @@ class SignTask:
     def getSignTaskInfo(user):
         header['Cookie'] = user['cookie']
         datas = json.loads(requests.post(
-            url=TASKURL, json={}, headers=header).text)['datas']
+            url=SIGN_TASK_URL, json={}, headers=header).text)['datas']
         unSignedTasks = datas['unSignedTasks']
         for task in unSignedTasks:
             if '东北农业大学学生健康信息上报' in task['taskName']:
@@ -119,7 +165,7 @@ class SignTask:
     @staticmethod
     def getDetailTask(user, signTaskInfo):
         header['Cookie'] = user['cookie']
-        datas = json.loads(requests.post(url=DETAILTASKURL,
+        datas = json.loads(requests.post(url=DETAIL_SIGN_TASK_URL,
                            json=signTaskInfo, headers=header).text)['datas']
         return datas
 
@@ -150,69 +196,100 @@ class SignTask:
         return form
 
     @staticmethod
-    def getBodyString(form):
-        return Utils.aesEncrypt(json.dumps(form), AESKEY)
+    def submitTask():
+        for user in users:
+            status = ''
+            Utils.initStuInfo(user)
+            if user['cookie'] == '':
+                status = Utils.getTime() + '获取Cookie失败'
+                print(user['username'] + ' ' + status)
+                continue
+            signTaskInfo = SignTask.getSignTaskInfo(user)
+            if signTaskInfo['signWid'] == -1:
+                status = Utils.getTime() + '无签到任务'
+                print(user['username'] + ' ' + status)
+                continue
+            form = Utils.getReqForm(user, SignTask.getAnswerForm(
+                user, SignTask.getDetailTask(user, signTaskInfo)))
+            liteHeader['Cookie'] = user['cookie']
+            liteHeader['Cpdaily-Extension'] = Utils.getCpdailyExtension(user)
+            resBody = json.loads(requests.post(
+                url=SUBMIT_SIGN_URL, json=form, headers=liteHeader).text)
+            if '任务未开始' in resBody['message']:
+                status = Utils.getTime() + '任务未开始'
+            else:
+                status = Utils.getTime() + 'SUCCESS'
+            print(user['username'] + ' ' + status)
+
+
+class AttendanceTask:
+    @staticmethod
+    def getAttendanceTaskInfo(user):
+        header['Cookie'] = user['cookie']
+        datas = json.loads(requests.post(
+            url=ATTENDANCE_TASK_URL, json={}, headers=header).text)['datas']
+        unSignedTasks = datas['unSignedTasks']
+        for task in unSignedTasks:
+            if '夜不归寝' in task['taskName']:
+                return {'signInstanceWid': task['signInstanceWid'], 'signWid': task['signWid']}
+        return {'signInstanceWid': -1, 'signWid': -1}
 
     @staticmethod
-    def getSign(reqForm):
-        form = {
-            "appVersion": '9.0.12',
-            "bodyString": reqForm['bodyString'],
-            "deviceId": reqForm["deviceId"],
-            "lat": reqForm["lat"],
-            "lon": reqForm["lon"],
-            "model": reqForm["model"],
-            "systemName": reqForm["systemName"],
-            "systemVersion": reqForm["systemVersion"],
-            "userId": reqForm["userId"],
-        }
-        signStr = ''
-        for info in form:
-            if signStr:
-                signStr += '&'
-            signStr += "{}={}".format(info, form[info])
-        signStr += "&{}".format(AESKEY)
-        return hashlib.md5(signStr.encode()).hexdigest()
+    def getDetailTask(user, signTaskInfo):
+        header['Cookie'] = user['cookie']
+        datas = json.loads(requests.post(url=DETAIL_ATTENDANCE_TASK_URL,
+                           json=signTaskInfo, headers=header).text)['datas']
+        return datas
 
     @staticmethod
-    def getReqForm(user, form):
-        reqForm = {}
-        reqForm['appVersion'] = '9.0.12'
-        reqForm['systemName'] = "iOS"
-        reqForm['bodyString'] = SignTask.getBodyString(form)
-        reqForm['lon'] = form['longitude']
-        reqForm['calVersion'] = 'firstv'
-        reqForm['model'] = 'iPhone11,2'
-        reqForm['systemVersion'] = '15.0'
-        reqForm['deviceId'] = user['deviceId']
-        reqForm['userId'] = user['username']
-        reqForm['version'] = "first_v2"
-        reqForm['lat'] = form['latitude']
-        reqForm['sign'] = SignTask.getSign(reqForm)
-        return reqForm
+    def getAnswerForm(user, detailTask):
+        form = {}
+        form['signInstanceWid'] = detailTask['signInstanceWid']
+        form['longitude'] = user['lon']
+        form['latitude'] = user['lat']
+        form['isMalposition'] = detailTask['isMalposition']
+        form['abnormalReason'] = ''
+        form['signPhotoUrl'] = ''
+        form['position'] = user['position']
+        form['uaIsCpadaily'] = True
+        return form
+
+    @staticmethod
+    def submitTask():
+        for user in users:
+            status = ''
+            Utils.initStuInfo(user)
+            if user['cookie'] == '':
+                status = Utils.getTime() + '获取Cookie失败'
+                print(user['username'] + ' ' + status)
+                continue
+            signTaskInfo = AttendanceTask.getAttendanceTaskInfo(user)
+            if signTaskInfo['signWid'] == -1:
+                status = Utils.getTime() + '无查寝任务'
+                print(user['username'] + ' ' + status)
+                continue
+            form = Utils.getReqForm(user, AttendanceTask.getAnswerForm(
+                user, AttendanceTask.getDetailTask(user, signTaskInfo)))
+            liteHeader['Cookie'] = user['cookie']
+            liteHeader['Cpdaily-Extension'] = Utils.getCpdailyExtension(user)
+            resBody = json.loads(requests.post(
+                url=SUBMIT_ATTENDANCE_URL, json=form, headers=liteHeader).text)
+            if '任务未开始' in resBody['message']:
+                status = Utils.getTime() + '任务未开始'
+            else:
+                status = Utils.getTime() + 'SUCCESS'
+            print(user['username'] + ' ' + status)
+
+
+def main(args):
+    if len(args) <= 1:
+        print('缺少参数')
+        return
+    if args[1] == '0':
+        SignTask.submitTask()
+    elif args[1] == '1':
+        AttendanceTask.submitTask()
 
 
 if __name__ == '__main__':
-    for user in users:
-        status = ''
-        Utils.initStuInfo(user)
-        if user['cookie'] == '':
-            status = Utils.getTime() + '获取Cookie失败'
-            print(user['username'] + ' ' + status)
-            continue
-        signTaskInfo = SignTask.getSignTaskInfo(user)
-        if signTaskInfo['signWid'] == -1:
-            status = Utils.getTime() + '无签到任务'
-            print(user['username'] + ' ' + status)
-            continue
-        form = SignTask.getReqForm(user, SignTask.getAnswerForm(
-            user, SignTask.getDetailTask(user, signTaskInfo)))
-        liteHeader['Cookie'] = user['cookie']
-        liteHeader['Cpdaily-Extension'] = Utils.getCpdailyExtension(user)
-        resBody = json.loads(requests.post(
-            url=LOGINURL, json=form, headers=liteHeader).text)
-        if '任务未开始' in resBody['message']:
-            status = Utils.getTime() + '任务未开始'
-        else:
-            status = Utils.getTime() + 'SUCCESS'
-        print(user['username'] + ' ' + status)
+    main(sys.argv)
