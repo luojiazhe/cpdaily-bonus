@@ -182,7 +182,7 @@ class SignTask:
                 for option in extraFieldItems:
                     if option['isAbnormal'] == False:
                         extraFieldItemValues.append(
-                            {'extraFieldItemValue': option['value'], 'extraFieldItemWid': option['wid']})
+                            {'extraFieldItemValue': option['content'], 'extraFieldItemWid': option['wid']})
                         break
             form['extraFieldItems'] = extraFieldItemValues
         form['longitude'] = user['lon']
