@@ -1,5 +1,3 @@
-#coding=utf-8
-
 import sys
 import requests
 import json
@@ -157,8 +155,12 @@ class SignTask:
         datas = json.loads(requests.post(
             url=SIGN_TASK_URL, json={}, headers=header).text)['datas']
         unSignedTasks = datas['unSignedTasks']
+        leaveTasks = datas['leaveTasks']
         for task in unSignedTasks:
             if '东北农业大学学生健康信息上报' in task['taskName']:
+                return {'signInstanceWid': task['signInstanceWid'], 'signWid': task['signWid']}
+        for task in leaveTasks:
+            if '东北农业大学学生健康信息上报' in task['taskName']:    
                 return {'signInstanceWid': task['signInstanceWid'], 'signWid': task['signWid']}
         return {'signInstanceWid': -1, 'signWid': -1}
 
